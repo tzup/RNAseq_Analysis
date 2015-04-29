@@ -13,18 +13,44 @@ output:
 
 This tutorial outline an RNAseq analysis routine conducted in my R + Biocondcutor data analysis course (BIOS6660) using one of my collaborator's data set, Dr. Eric Schmidt.  Since RNAseq dataset is typically very large, we extracted only Chromosome 19 to ease perform the analysis on local computer (mostly laptops)
 
-This is an R Markdown document. Markdown is a simple formatting syntax for authoring HTML, PDF, and MS Word documents. For more details on using R Markdown see <http://rmarkdown.rstudio.com>.
+## Experimental Design
 
-When you click the **Knit** button a document will be generated that includes both content as well as the output of any embedded R code chunks within the document. You can embed an R code chunk like this:
+Read in the descriptive data file and run summary statistics
 
-```{r}
-summary(cars)
+```{r, cache=TRUE, results='markup', message=FALSE, warning=FALSE}
+## Read in descriptive data file
+targets = read.table('./data/targets.txt', header = T)
+## printing file table
+knitr::kable(targets)
 ```
 
-You can also embed plots, for example:
+It seems like we have a total of 6 FASTQ files and 2 experimental grouping (CLP vs. Sham) in mouse sample
 
-```{r, echo=FALSE}
-plot(cars)
+
+## Mapping FASTQ to genome
+
+We will be using QuasR, which is an extremely versatile NGS mapping and postprocessing pipeline for RNA-seq It uses Rbowtie for upgapped alignments adn SpliceMap for spliced alignments
+
+```{r, cache=TRUE, results='markup', message=FALSE, warning=FALSE}
+library(QuasR)
+targets = read.table("./data/targets.txt", header = T)
+write.table(targets[,1:2], 'data/QuasR_samples.txt', row.names=F, quote=F, sep='\t')
+sampleFile = "./data/QuasR_samples.txt"
+genomeFile = "./data/Mouse.chromosome.19.fa"
+results = "./result"
+cl = makeCluster(10)
+
+
+## Single command to index reference, align all samples and generate BAM files
+proj <- qAlign(sampleFile, genome=genomeFile, maxHits=1, splicedAlignment=T, alignmentsDir=results, 
+               clObj=cl, cacheDir=results)
+# Note: splicedAlignment should be set to TRUE when the reads are >=50nt long  
+alignstats <- alignmentStats(proj) # Alignment summary report
+alignstats = as.data.frame(alignstats)
+align.mapped.percent = alignstats$
+
+knitr::kable(alignstats)
 ```
+ 
+ 
 
-Note that the `echo = FALSE` parameter was added to the code chunk to prevent printing of the R code that generated the plot.
