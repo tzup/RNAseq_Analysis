@@ -5,11 +5,22 @@ date: "April 29, 2015"
 output: 
   pdf_document:
     latex_engine: lualatex
+    toc: true
+    toc_depth: 2
+    number_sections: true
+    fig_width: 5
+    fig_height: 4
+    fig_caption: true
+    highlight: tango
 ---
 
-# RNAseq Analysis
+RNAseq Analysis
+===============
 
-## Background
+***
+Background
+----------
+
 
 This tutorial outline an RNAseq analysis routine conducted in my R + Biocondcutor data analysis course (BIOS6660) using one of my collaborator's data set, Dr. Eric Schmidt.  Since RNAseq dataset is typically very large, we extracted only Chromosome 19 to ease perform the analysis on local computer (mostly laptops)
 
@@ -27,11 +38,14 @@ knitr::kable(targets)
 It seems like we have a total of 6 FASTQ files and 2 experimental grouping (CLP vs. Sham) in mouse sample
 
 
-## Mapping FASTQ to genome
+Mapping FASTQ to genome
+-----------------------
 
 We will be using QuasR, which is an extremely versatile NGS mapping and postprocessing pipeline for RNA-seq It uses Rbowtie for upgapped alignments adn SpliceMap for spliced alignments
 
-```{r, cache=TRUE, results='markup', message=FALSE, warning=FALSE}
+Note: QuasR is trying to be clever: if it finds BAM files already exists then it will not generate the file again.  Therefore, to do a fresh run, need to delete everything in the "result" folder ...
+
+```{r, cache=TRUE, results='markup', message=FALSE, warning=FALSE,eval=FALSE}
 library(QuasR)
 targets = read.table("./data/targets.txt", header = T)
 write.table(targets[,1:2], 'data/QuasR_samples.txt', row.names=F, quote=F, sep='\t')
@@ -42,15 +56,224 @@ cl = makeCluster(10)
 
 
 ## Single command to index reference, align all samples and generate BAM files
-proj <- qAlign(sampleFile, genome=genomeFile, maxHits=1, splicedAlignment=T, alignmentsDir=results, 
-               clObj=cl, cacheDir=results)
+proj <- qAlign(sampleFile, genome=genomeFile, maxHits=1, splicedAlignment=T, alignmentsDir=results, clObj=cl, cacheDir=results)
 # Note: splicedAlignment should be set to TRUE when the reads are >=50nt long  
 alignstats <- alignmentStats(proj) # Alignment summary report
-alignstats = as.data.frame(alignstats)
-align.mapped.percent = alignstats$
+#knitr::kable(alignstats)
+```
 
-knitr::kable(alignstats)
+***
+## Alignment Summary
+
+The following enumerates the number of reads in each FASTQ file and how many of them aligned to the reference. Note: the percentage of aligned reads is 100% in this particular example because only alignable reads were selected when generating the sample FASTQ files for this exercise. For QuasR this step can be omitted because the qAlign function generats this information automatically.
+ 
+```{r, cache=TRUE, results='markup', message=FALSE, warning=FALSE}
+library(ShortRead); library(Rsamtools)
+## Extract bam file names:
+bam.filenames = proj@alignments$FileName
+
+Nreads <- countLines(dirPath="./data/", pattern=".fastq$")/4
+bfl <- BamFileList(bam.filenames, yieldSize=50000, index=character())
+Nalign <- countBam(bfl, param=ScanBamParam(flag=scanBamFlag(isUnmappedQuery=F)))
+(read_statsDF <- data.frame(FileName=names(Nreads), Nreads=Nreads, Nalign=Nalign$records, Perc_Aligned=Nalign$records/Nreads*100))
+write.table(read_statsDF, "./result/read_statsDF.txt", row.names=FALSE, quote=FALSE, sep="\t")
+
+knitr::kable(read_statsDF)
+
 ```
  
- 
+***
+## Quality Report
 
+The following shows how to create read quality reports with QuasR’s qQCReport function or with the custom seeFastq function
+
+
+```{r, cache=TRUE, results='markup', message=FALSE, warning=FALSE, eval=FALSE}
+qQCReport(proj, pdfFilename="qc_report.pdf")
+source("http://faculty.ucr.edu/~tgirke/Documents/R_BioCond/My_R_Scripts/fastqQuality.R")
+myfiles <- paste0("data/", targets$FileName); names(myfiles) <- targets$SampleName
+fqlist <- seeFastq(fastq=myfiles, batchsize=50000, klength=8)
+pdf("RNAseq_Results/fastqReport.pdf", height=18, width=4*length(myfiles)); seeFastqPlot(fqlist); dev.off()
+
+```
+
+***
+## Store Annotations in TranscriptDb
+
+Storing annotation ranges in TranscriptDb databases makes many operations more robust and convenient
+
+```{r, cache=TRUE, results='markup', message=FALSE, warning=FALSE}
+
+library(GenomicFeatures)
+txdb <- makeTranscriptDbFromGFF(file="./data/genes.gtf",
+                                format="gtf",
+                                dataSource="mm9",
+                                species="Mus musculus")
+saveDb(txdb, file="./data/mouse_annotation.sqlite")
+txdb <- loadDb("./data/mouse_annotation.sqlite") 
+eByg <- exonsBy(txdb, by="gene")
+```
+
+***
+## Read Counting with countOverlaps
+
+The gene signal was obtained by overlapping sequened reads onto the pre-defined gene region ranges.  The resulting count table was further filtered to remove genes with zero counts.
+
+```{r, cache=TRUE, results='markup', message=FALSE, warning=FALSE}
+samples <- as.character(targets$Factor_long)
+samplespath <- bam.filenames
+names(samplespath) <- samples
+countDF <- data.frame(row.names=names(eByg))
+for(i in samplespath) {
+  aligns <- readGAlignmentsFromBam(i) # Substitute next two lines with this one.
+  seqnames(aligns) = rep('chr19', length(aligns))
+  counts <- countOverlaps(eByg, aligns, ignore.strand=TRUE)
+  countDF <- cbind(countDF, counts)
+}
+colnames(countDF) <- samples
+
+## Remove row with all zeros
+row.sum = rowSums(countDF)
+chr19.countDF = countDF[row.sum != 0,]
+
+chr19.countDF[1:4,]
+write.table(chr19.countDF, "./result/chr19_countDF", quote=FALSE, sep="\t", col.names = NA)
+countDF <- read.table("./result/chr19_countDF")
+```
+
+***
+## Simple RPKM Normalization
+
+RPKM: reads per kilobase of exon model per million mapped reads
+
+```{r, cache=TRUE, results='markup', message=FALSE, warning=FALSE}
+returnRPKM <- function(counts, gffsub) {
+  geneLengthsInKB <- sum(width(reduce(gffsub)))/1000 # Length of exon union per gene in kbp
+  millionsMapped <- sum(counts)/1e+06 # Factor for converting to million of mapped reads.
+  rpm <- counts/millionsMapped # RPK: reads per kilobase of exon model.
+  rpkm <- rpm/geneLengthsInKB # RPKM: reads per kilobase of exon model per million mapped reads.
+  return(rpkm)
+}
+countDFrpkm <- apply(countDF, 2, function(x) returnRPKM(counts=x, gffsub=eByg[rownames(countDF)]))
+countDFrpkm[1:4,]
+```
+
+***
+## Reproducibility Check by Sample-Wise Clustering
+
+QC check of the sample reproducibility by computing a correlating matrix and plotting it as a tree. Note: the plotMDS function from edgeR is a more robust method for this task.
+
+
+```{r, cache=TRUE, results='markup', message=FALSE, warning=FALSE}
+library(ape) 
+d <- cor(countDFrpkm, method="spearman")
+hc <- hclust(dist(1-d))
+plot.phylo(as.phylo(hc), type="p", edge.col=4, edge.width=3, show.node.label=TRUE, no.margin=TRUE)
+
+```
+
+As expected, CLP and Sham samples clustered together respectively
+
+***
+## Identify DEGs with Simple Fold Change Method
+
+```{r, cache=TRUE, results='markup', message=FALSE, warning=FALSE}
+## Compute mean values for replicates
+source("http://faculty.ucr.edu/~tgirke/Documents/R_BioCond/My_R_Scripts/colAg.R")
+countDFrpkm_mean <- colAg(myMA=countDFrpkm, group=c(1,1,1,2,2,2), myfct=mean)
+countDFrpkm_mean[1:4,]
+
+## Log2 fold change
+countDFrpkm_mean <- cbind(countDFrpkm_mean, log2ratio=log2(countDFrpkm_mean[,2]/countDFrpkm_mean[,1]))
+countDFrpkm_mean <- countDFrpkm_mean[is.finite(countDFrpkm_mean[,3]), ]
+degs2fold <- countDFrpkm_mean[countDFrpkm_mean[,3] >= 1 | countDFrpkm_mean[,3] <= -1,]
+degs2fold[1:4,]
+write.table(degs2fold, "./result/degs2fold.xls", quote=FALSE, sep="\t", col.names = NA)
+degs2fold <- read.table("./result/degs2fold.xls")
+```
+
+***
+## Identify DEGs with DESeq Library
+
+```{r, cache=TRUE, results='markup', message=FALSE, warning=FALSE}
+library(DESeq)
+countDF <- read.table("./result/chr19_countDF")
+conds <- targets$Factor
+cds <- newCountDataSet(countDF, conds) # Creates object of class CountDataSet derived from eSet class
+counts(cds)[1:4, ] # CountDataSet has similar accessor methods as eSet class.
+cds <- estimateSizeFactors(cds) # Estimates library size factors from count data. Alternatively, one can provide here the true library sizes with sizeFactors(cds) <- c(..., ...)
+cds <- estimateDispersions(cds) # Estimates the variance within replicates
+res <- nbinomTest(cds, "CLP", "Sham") # Calls DEGs with nbinomTest
+res <- na.omit(res)
+res2fold <- res[res$log2FoldChange >= 1 | res$log2FoldChange <= -1,]
+res2foldpadj <- res2fold[res2fold$padj <= 0.05, ]
+res2foldpadj[1:4,1:8]
+```
+
+***
+## Identify DEGs with edgeR's Exact Method
+
+```{r, cache=TRUE, results='markup', message=FALSE, warning=FALSE}
+library(edgeR)
+countDF <- read.table("./result/chr19_countDF")
+y <- DGEList(counts=countDF, group=conds) # Constructs DGEList object
+y <- estimateCommonDisp(y) # Estimates common dispersion
+y <- estimateTagwiseDisp(y) # Estimates tagwise dispersion
+et <- exactTest(y, pair=c("CLP", "Sham")) # Computes exact test for the negative binomial distribution.
+topTags(et, n=4)
+edge <- as.data.frame(topTags(et, n=50000)) 
+edge2fold <- edge[edge$logFC >= 1 | edge$logFC <= -1,]
+edge2foldpadj <- edge2fold[edge2fold$FDR <= 0.01, ]
+```
+
+***
+## Idenfity DEGs with edgeR's GLM Approach
+
+```{r, cache=TRUE, results='markup', message=FALSE, warning=FALSE}
+library(edgeR)
+countDF <- read.table("./result/chr19_countDF")
+y <- DGEList(counts=countDF, group=conds) # Constructs DGEList object
+## Filtering and normalization
+keep <- rowSums(cpm(y)>1) >= 2; y <- y[keep, ]
+y <- calcNormFactors(y)
+design <- model.matrix(~0+group, data=y$samples); colnames(design) <- levels(y$samples$group) # Design matrix
+## Estimate dispersion
+y <- estimateGLMCommonDisp(y, design, verbose=TRUE) # Estimates common dispersions
+y <- estimateGLMTrendedDisp(y, design) # Estimates trended dispersions
+y <- estimateGLMTagwiseDisp(y, design) # Estimates tagwise dispersions 
+## Fit the negative binomial GLM for each tag
+fit <- glmFit(y, design) # Returns an object of class DGEGLM
+contrasts <- makeContrasts(contrasts="CLP-Sham", levels=design) # Contrast matrix is optional
+lrt <- glmLRT(fit, contrast=contrasts[,1]) # Takes DGEGLM object and carries out the likelihood ratio test. 
+edgeglm <- as.data.frame(topTags(lrt, n=length(rownames(y))))
+## Filter on fold change and FDR
+edgeglm2fold <- edgeglm[edgeglm$logFC >= 1 | edgeglm$logFC <= -1,]
+edgeglm2foldpadj <- edgeglm2fold[edgeglm2fold$FDR <= 0.01, ]
+```
+
+***
+## Comparison Among DEG Results
+
+```{r, cache=TRUE, results='markup', message=FALSE, warning=FALSE}
+source("http://faculty.ucr.edu/~tgirke/Documents/R_BioCond/My_R_Scripts/overLapper.R")
+setlist <- list(edgeRexact=rownames(edge2foldpadj), edgeRglm=rownames(edgeglm2foldpadj), DESeq=as.character(res2foldpadj[,1]), RPKM=rownames(degs2fold))
+OLlist <- overLapper(setlist=setlist, sep="_", type="vennsets")
+counts <- sapply(OLlist$Venn_List, length)
+vennPlot(counts=counts, mymain="DEG Comparison")
+```
+
+Number of common genes among all 4 methods: `r length(OLlist$Venn_List$edgeRexact_edgeRglm_DESeq_RPKM)`
+
+***
+## Heatmap of Top Ranking DEGs
+
+```{r, cache=TRUE, results='markup', message=FALSE, warning=FALSE}
+library(lattice); library(gplots)
+y <- countDFrpkm[rownames(edgeglm2foldpadj)[1:15],]
+colnames(y) <- targets$Factor
+y <- t(scale(t(as.matrix(y))))
+y <- y[order(y[,1]),]
+levelplot(t(y), height=0.2, col.regions=colorpanel(40, "darkblue", "yellow", "white"), main="Expression Values (DEG Filter: FDR 1%, FC > 2)", colorkey=list(space="top"), xlab="", ylab="Gene ID")
+
+
+```
