@@ -6,29 +6,77 @@ output:
   pdf_document:
     latex_engine: lualatex
     toc: true
-    toc_depth: 2
+    toc_depth: 3
     number_sections: true
     fig_width: 5
     fig_height: 4
     fig_caption: true
     highlight: tango
+fontsize: 12pt
+classoption: landscape
+
+
+references:
+- id: rnaseqReviewWang
+  title: Next-generation transcriptome assembly
+  author:
+  - family: Wang
+    given: Martin JA
+  container-title: Nat Rev Genet
+  volume: 12
+  URL: 'http://www.nature.com/nrg/journal/v12/n10/full/nrg3068.html'
+  DOI: 10.1038/nrg3068
+  issue: 10
+  publisher: Nature Publishing Group
+  page: 671-82
+  type: article-journal
+  issued:
+    year: 2011
+    month: 9
+    
+- id: rnaseqReviewPepke
+  title: Computation for ChIP-seq and RNA-seq studies
+  author:
+  - family: Pepke
+    given: Shirley
+  container-title: Nat Methods
+  volume: 6
+  URL: 'http://www.nature.com/nmeth/journal/v6/n11s/full/nmeth.1371.html'
+  DOI: 10.1038/nmeth.1371
+  issue: 11
+  publisher: Nature Publishing Group
+  page: S22-32
+  type: article-journal
+  issued:
+    year: 2009
+    month: 11  
 ---
 
-RNAseq Analysis
-===============
+
 
 ***
 Background
-----------
+==========
 
+This tutorial outlines a transcriptomic RNAseq analysis workflow module conducted in my course; [R + Biocondcutor data analysis course (BIOS6660)](http://compbio.ucdenver.edu/ccp/Hunter_lab/Phang/Page%2012/index.html) at the [Anschutz Medical Campus, University of Colorado, Denver](http://www.ucdenver.edu/anschutz/Pages/landing.aspx). We use a dataset from a collaborator, [Dr. Eric Schmidt](http://www.ucdenver.edu/academics/colleges/medicalschool/departments/medicine/Pulmonary/Pages/Eric-Schmidt-MD.aspx) (PI), to investigate pulmonary endothelial glycocalyx recovery after sepsis.  To learn more about RNA-seq technology, please refer to these 2 early publications. [see @rnaseqReviewWang and @rnaseqReviewPepke]
 
-This tutorial outline an RNAseq analysis routine conducted in my R + Biocondcutor data analysis course (BIOS6660) using one of my collaborator's data set, Dr. Eric Schmidt.  Since RNAseq dataset is typically very large, we extracted only Chromosome 19 to ease perform the analysis on local computer (mostly laptops)
+Analysis Goals
+--------------
 
-## Experimental Design
+The PI is interested in identifying differentially expressed genes comparing CLP vs. Sham in a mouse model.  
 
-Read in the descriptive data file and run summary statistics
+***
+Experimental Design
+===================
 
-```{r, cache=TRUE, results='markup', message=FALSE, warning=FALSE}
+The dataset contains two comparison groups; CLP and Sham, with a sample size of 3 for each.  Since RNAseq dataset is typically very large, we have extracted only Chromosome 19 from each sample, using the [seqtk tool](http://ged.msu.edu/angus/tutorials-2013/seqtk_tools.html) to ease the computational process on the students' personal computer, which are mostly less powerful then server-class computers.  The goal of this course is to enable students to perform data analysis using their owned resources.
+
+Experimental Descriptive File
+-----------------------------
+
+First, we will read in the experimental descriptive data file which lists the sample names and summarizes the grouping of each samples.
+
+```{r Experimet_Decription, cache=TRUE, results='markup', message=FALSE, warning=FALSE}
 ## Read in descriptive data file
 targets = read.table('./data/targets.txt', header = T)
 ## printing file table
@@ -37,15 +85,90 @@ knitr::kable(targets)
 
 It seems like we have a total of 6 FASTQ files and 2 experimental grouping (CLP vs. Sham) in mouse sample
 
+***
+Quality Control of FASTQ Files
+==============================
 
-Mapping FASTQ to genome
+FASTQ QC with `seqTools`
+------------------------
+
+We used a [Bioconductor](http://www.bioconductor.org) tool; `seqTools` to assess the quality of FASTQ file.  Note that the `seqTools` package document a details description of the FASTQ format, check it out.
+
+```{r Quality_Control_FASTQ, cache=TRUE, results='hide', message=FALSE, warning=FALSE}
+library(seqTools)
+filenames = c(
+  './data/CLP_lung_48h_rep1_chr19_read1.fastq',
+  './data/CLP_lung_48h_rep2_chr19_read1.fastq',
+  './data/CLP_lung_48h_rep3_chr19_read1.fastq',
+  './data/Sham_lung_48h_rep1_chr19_read1.fastq',
+  './data/Sham_lung_48h_rep2_chr19_read1.fastq',
+  './data/Sham_lung_48h_rep3_chr19_read1.fastq'
+  )
+fq = fastqq(filenames = filenames, probeLabel = c(paste('CLP',1:3, sep = '-'), paste('Sham',4:6,sep='-')))
+pdf(file = './qc/seqTools.fastq.qc.pdf')
+plotPhredQuant(fq, 1)
+plotPhredQuant(fq, 2)
+plotPhredQuant(fq, 3)
+plotPhredQuant(fq, 4)
+plotPhredQuant(fq, 5)
+plotPhredQuant(fq, 6)
+dev.off()
+
+plotMergedPhredQuant(fq, main = 'Phred Quantiles for all files')
+
+```
+
+
+Non-R Approach 1: FASTQC
+------------------------
+
+[FASTQC](http://www.bioinformatics.babraham.ac.uk/projects/fastqc/) is a Graphic User Interface (GUI) tool designed to perform quality assessment of FASTQ files
+
+```{r QC_with_FASTQC, cache=TRUE, results='markup', message=FALSE, warning=FALSE, eval=FALSE}
+fastq.list = c(
+  './data/CLP_lung_48h_rep1_chr19_read1.fastq',
+  './data/CLP_lung_48h_rep2_chr19_read1.fastq',
+  './data/CLP_lung_48h_rep3_chr19_read1.fastq',
+  './data/Sham_lung_48h_rep1_chr19_read1.fastq',
+  './data/Sham_lung_48h_rep2_chr19_read1.fastq',
+  './data/Sham_lung_48h_rep3_chr19_read1.fastq'
+)
+for(i in 1:length(fastq.list)){
+  
+  output.dir.o = '-o'
+  output.dir = './qc/'
+  
+  
+	args.cond = c(
+    output.dir.o, output.dir,
+		fastq.list[i]
+	)
+	system2('fastqc', args = args.cond, wait = F)
+	
+}
+```
+
+
+Non-R Approach 2: RSeQC
 -----------------------
 
-We will be using QuasR, which is an extremely versatile NGS mapping and postprocessing pipeline for RNA-seq It uses Rbowtie for upgapped alignments adn SpliceMap for spliced alignments
+[RSeQC](http://rseqc.sourceforge.net) is an RNA-seq quality control package written in Python.  This Python package also include many QC utilities for SAM/BAM files.
 
-Note: QuasR is trying to be clever: if it finds BAM files already exists then it will not generate the file again.  Therefore, to do a fresh run, need to delete everything in the "result" folder ...
+***
+Mapping FASTQ to genome
+=======================
 
-```{r, cache=TRUE, results='markup', message=FALSE, warning=FALSE,eval=FALSE}
+Mapping with QuasR
+------------------
+
+We will be using `QuasR` Bioconductor package to map the FASTQ files onto the mouse genome to determine the read genomic coordinate.  `QuasR` is an extremely versatile NGS mapping and postprocessing pipeline for RNA-seq. It uses `Rbowtie` for upgapped alignments and SpliceMap for spliced alignments
+
+Note: `QuasR` is an intelligent package; if it finds BAM files already exists from the previous runs, it will not generate the file again.  If we want to do a new run, we need to delete everything in the "result" folder ...
+
+
+Note: It is best to put `eval=FALSE` before running `knitr` to avoid long mapping processes.
+
+```{r Mapping_with_QuasR, cache=TRUE, results='markup', message=FALSE, warning=FALSE,eval=FALSE}
 library(QuasR)
 targets = read.table("./data/targets.txt", header = T)
 write.table(targets[,1:2], 'data/QuasR_samples.txt', row.names=F, quote=F, sep='\t')
@@ -54,7 +177,6 @@ genomeFile = "./data/Mouse.chromosome.19.fa"
 results = "./result"
 cl = makeCluster(10)
 
-
 ## Single command to index reference, align all samples and generate BAM files
 proj <- qAlign(sampleFile, genome=genomeFile, maxHits=1, splicedAlignment=T, alignmentsDir=results, clObj=cl, cacheDir=results)
 # Note: splicedAlignment should be set to TRUE when the reads are >=50nt long  
@@ -62,12 +184,12 @@ alignstats <- alignmentStats(proj) # Alignment summary report
 #knitr::kable(alignstats)
 ```
 
-***
-## Alignment Summary
+### Alignment Summary
+
 
 The following enumerates the number of reads in each FASTQ file and how many of them aligned to the reference. Note: the percentage of aligned reads is 100% in this particular example because only alignable reads were selected when generating the sample FASTQ files for this exercise. For QuasR this step can be omitted because the qAlign function generats this information automatically.
  
-```{r, cache=TRUE, results='markup', message=FALSE, warning=FALSE}
+```{r Alignment_Summary, cache=TRUE, results='markup', message=FALSE, warning=FALSE}
 library(ShortRead); library(Rsamtools)
 ## Extract bam file names:
 bam.filenames = proj@alignments$FileName
@@ -75,34 +197,152 @@ bam.filenames = proj@alignments$FileName
 Nreads <- countLines(dirPath="./data/", pattern=".fastq$")/4
 bfl <- BamFileList(bam.filenames, yieldSize=50000, index=character())
 Nalign <- countBam(bfl, param=ScanBamParam(flag=scanBamFlag(isUnmappedQuery=F)))
-(read_statsDF <- data.frame(FileName=names(Nreads), Nreads=Nreads, Nalign=Nalign$records, Perc_Aligned=Nalign$records/Nreads*100))
-write.table(read_statsDF, "./result/read_statsDF.txt", row.names=FALSE, quote=FALSE, sep="\t")
+#(read_statsDF <- data.frame(FileName=names(Nreads), Nreads=Nreads, Nalign=Nalign$records, Perc_Aligned=Nalign$records/Nreads*100))
+#write.table(read_statsDF, "./result/read_statsDF.txt", row.names=FALSE, quote=FALSE, sep="\t")
 
+## Remove rownames before display
+rownames(read_statsDF) = c()
 knitr::kable(read_statsDF)
 
 ```
  
-***
-## Quality Report
 
-The following shows how to create read quality reports with QuasR’s qQCReport function or with the custom seeFastq function
+Mapping with `bowtie2` using the terminal
+-----------------------------------------
+
+For Mac and Linux users, if you are lucky enough have the proper computational resources, and have installed [bowtie2]() in your system.  Here are some codes for running `bowtie2` from R using the `system2` function.
+
+```{r Mapping_with_bowtie2, cache=TRUE, results='markup', message=FALSE, warning=FALSE, eval=FALSE}
+fastq.list = c(
+  './data/CLP_lung_48h_rep1_chr19_read1.fastq',
+  './data/CLP_lung_48h_rep2_chr19_read1.fastq',
+  './data/CLP_lung_48h_rep3_chr19_read1.fastq',
+  './data/Sham_lung_48h_rep1_chr19_read1.fastq',
+  './data/Sham_lung_48h_rep2_chr19_read1.fastq',
+  './data/Sham_lung_48h_rep3_chr19_read1.fastq'
+)
+
+#for(i in 1){
+for(i in 1:length(fastq.list)){
+  
+      cat('Doing ', fastq.list[i], ' now .............................\n\n')
+  
+      # Bowtie2 mapping ---------------------------------------------------------
+      
+      process.p = '-p'
+      process.n = '10'
+      genome.x = '-x'
+      genome.path = '/Volumes/Tzu_Pegasus/Tzu_iMac_Documents/MyGenome/Mus_musculus_UCSC_mm9/Mus_musculus/UCSC/mm9/Sequence/Bowtie2Index/genome'
+      input.U = '-U'
+      input.file = fastq.list[i]
+      output.S = '-S'
+      if(length(grep('fastq.gz', input.file))){
+        output.file = gsub('.fastq.gz', '.sam', input.file)
+      }else if(length(grep('fastq', input.file))){
+        output.file = gsub('.fastq', '.sam', input.file)
+      }
+      output.file = gsub('./data/', './bowtie2_results/', output.file)
+      
+      
+      args.cond = c(
+          process.p, process.n,
+          genome.x, genome.path,
+          input.U, input.file,
+          output.S, output.file
+        )
+      
+      cat('Running bowtie2 now ............................... \n')
+      ptm = proc.time()
+      system2('bowtie2', args = args.cond)
+      time.ellapsed = proc.time() - ptm
+      cat('Ellapsed time is ' , time.ellapsed[3]/60, ' minutes\n')
+      
+      
+      # samtools view
+      samtools.comd = 'view'
+      samtools.input.bS = '-bS'
+      samtools.input = output.file
+      samtools.direct = '>'
+      samtools.output = gsub('.sam', '.bam', samtools.input)
+      
+      args.cond = c(
+          samtools.comd,
+          samtools.input.bS, samtools.input,
+          samtools.direct,
+          samtools.output
+        )
+      cat('Running samtools view now ............................... \n')
+      ptm = proc.time()
+      system2('samtools', args = args.cond)
+      time.ellapsed = proc.time() - ptm
+      cat('Ellapsed time is ' , time.ellapsed[3]/60, ' minutes\n')
+      
+      # samtools sort
+      samtools.comd = 'sort'
+      samtools.input = samtools.output
+      samtools.output = gsub('.bam', '_sorted', samtools.input)
+      
+      args.cond = c(
+        samtools.comd,
+        samtools.input,
+        samtools.output
+      )
+      
+      cat('Running samtools sort now ............................... \n')
+      ptm = proc.time()
+      system2('samtools', args = args.cond)
+      time.ellapsed = proc.time() - ptm
+      cat('Ellapsed time is ' , time.ellapsed[3]/60, ' minutes\n')
+      
+      
+      # samtools index
+      samtools.comd = 'index'
+      samtools.input = paste(samtools.output,'.bam', sep = '')
+      
+      args.cond = c(
+        samtools.comd,  
+        samtools.input
+      )
+      
+      cat('Running samtools index now ............................... \n')
+      ptm = proc.time()
+      system2('samtools', args = args.cond)
+      time.ellapsed = proc.time() - ptm
+      cat('Ellapsed time is ' , time.ellapsed[3]/60, ' minutes\n')
+      
+      
+       
+}
+```
 
 
-```{r, cache=TRUE, results='markup', message=FALSE, warning=FALSE, eval=FALSE}
-qQCReport(proj, pdfFilename="qc_report.pdf")
+
+
+FASTQ Quality Report revisited by `QuasR`
+-----------------------------------------
+
+The following shows how to create read quality reports with `QuasR`’s qQCReport function or with the custom seeFastq function from UC Rivierside, [Dr. Girke group](http://manuals.bioinformatics.ucr.edu/home)
+
+
+```{r FASTQ_QC_Revisited, cache=TRUE, results='markup', message=FALSE, warning=FALSE, eval=FALSE}
+qQCReport(proj, pdfFilename="./qc/qc_report.pdf")
 source("http://faculty.ucr.edu/~tgirke/Documents/R_BioCond/My_R_Scripts/fastqQuality.R")
 myfiles <- paste0("data/", targets$FileName); names(myfiles) <- targets$SampleName
 fqlist <- seeFastq(fastq=myfiles, batchsize=50000, klength=8)
-pdf("RNAseq_Results/fastqReport.pdf", height=18, width=4*length(myfiles)); seeFastqPlot(fqlist); dev.off()
+pdf("./qc/fastqReport.pdf", height=18, width=4*length(myfiles)); seeFastqPlot(fqlist); dev.off()
 
 ```
 
 ***
-## Store Annotations in TranscriptDb
+Gene Read Count
+===============
+
+Annotations of Transcriptome
+----------------------------
 
 Storing annotation ranges in TranscriptDb databases makes many operations more robust and convenient
 
-```{r, cache=TRUE, results='markup', message=FALSE, warning=FALSE}
+```{r Transcriptome_Annotation, cache=TRUE, results='markup', message=FALSE, warning=FALSE}
 
 library(GenomicFeatures)
 txdb <- makeTranscriptDbFromGFF(file="./data/genes.gtf",
@@ -114,13 +354,15 @@ txdb <- loadDb("./data/mouse_annotation.sqlite")
 eByg <- exonsBy(txdb, by="gene")
 ```
 
-***
-## Read Counting with countOverlaps
+
+Generate Read Count Table
+-------------------------
 
 The gene signal was obtained by overlapping sequened reads onto the pre-defined gene region ranges.  The resulting count table was further filtered to remove genes with zero counts.
 
-```{r, cache=TRUE, results='markup', message=FALSE, warning=FALSE}
+```{r Read_Count_Table, cache=TRUE, results='markup', message=FALSE, warning=FALSE}
 samples <- as.character(targets$Factor_long)
+samples = gsub('_lung_48h_','.',samples)
 samplespath <- bam.filenames
 names(samplespath) <- samples
 countDF <- data.frame(row.names=names(eByg))
@@ -130,23 +372,26 @@ for(i in samplespath) {
   counts <- countOverlaps(eByg, aligns, ignore.strand=TRUE)
   countDF <- cbind(countDF, counts)
 }
+
+
 colnames(countDF) <- samples
 
 ## Remove row with all zeros
 row.sum = rowSums(countDF)
 chr19.countDF = countDF[row.sum != 0,]
 
-chr19.countDF[1:4,]
+knitr::kable(chr19.countDF[1:4,], align = 'c')
 write.table(chr19.countDF, "./result/chr19_countDF", quote=FALSE, sep="\t", col.names = NA)
 countDF <- read.table("./result/chr19_countDF")
 ```
 
-***
-## Simple RPKM Normalization
+
+Simple RPKM Normalization
+-------------------------
 
 RPKM: reads per kilobase of exon model per million mapped reads
 
-```{r, cache=TRUE, results='markup', message=FALSE, warning=FALSE}
+```{r Simple_RPKM, cache=TRUE, results='markup', message=FALSE, warning=FALSE}
 returnRPKM <- function(counts, gffsub) {
   geneLengthsInKB <- sum(width(reduce(gffsub)))/1000 # Length of exon union per gene in kbp
   millionsMapped <- sum(counts)/1e+06 # Factor for converting to million of mapped reads.
@@ -155,16 +400,17 @@ returnRPKM <- function(counts, gffsub) {
   return(rpkm)
 }
 countDFrpkm <- apply(countDF, 2, function(x) returnRPKM(counts=x, gffsub=eByg[rownames(countDF)]))
-countDFrpkm[1:4,]
+
+knitr::kable(countDFrpkm[1:4,], align = 'c')
 ```
 
-***
-## Reproducibility Check by Sample-Wise Clustering
+
+### Hierarchical Clustering
 
 QC check of the sample reproducibility by computing a correlating matrix and plotting it as a tree. Note: the plotMDS function from edgeR is a more robust method for this task.
 
 
-```{r, cache=TRUE, results='markup', message=FALSE, warning=FALSE}
+```{r Hierarchical_Clustering, cache=TRUE, results='markup', message=FALSE, warning=FALSE}
 library(ape) 
 d <- cor(countDFrpkm, method="spearman")
 hc <- hclust(dist(1-d))
@@ -174,46 +420,52 @@ plot.phylo(as.phylo(hc), type="p", edge.col=4, edge.width=3, show.node.label=TRU
 
 As expected, CLP and Sham samples clustered together respectively
 
-***
-## Identify DEGs with Simple Fold Change Method
 
-```{r, cache=TRUE, results='markup', message=FALSE, warning=FALSE}
+Identification of DEGs with various methods
+===========================================
+
+Identify DEGs with Simple Fold Change Method
+--------------------------------------------
+
+```{r DEG_Simple_FoldChange, cache=TRUE, results='markup', message=FALSE, warning=FALSE}
 ## Compute mean values for replicates
 source("http://faculty.ucr.edu/~tgirke/Documents/R_BioCond/My_R_Scripts/colAg.R")
 countDFrpkm_mean <- colAg(myMA=countDFrpkm, group=c(1,1,1,2,2,2), myfct=mean)
-countDFrpkm_mean[1:4,]
+knitr::kable(countDFrpkm_mean[1:4,])
 
 ## Log2 fold change
 countDFrpkm_mean <- cbind(countDFrpkm_mean, log2ratio=log2(countDFrpkm_mean[,2]/countDFrpkm_mean[,1]))
 countDFrpkm_mean <- countDFrpkm_mean[is.finite(countDFrpkm_mean[,3]), ]
 degs2fold <- countDFrpkm_mean[countDFrpkm_mean[,3] >= 1 | countDFrpkm_mean[,3] <= -1,]
-degs2fold[1:4,]
-write.table(degs2fold, "./result/degs2fold.xls", quote=FALSE, sep="\t", col.names = NA)
+knitr::kable(degs2fold[1:4,], align = 'c')
+write.table(degs2fold, "./result/degs2fold.txt", quote=FALSE, sep="\t", col.names = NA)
 degs2fold <- read.table("./result/degs2fold.xls")
 ```
 
-***
-## Identify DEGs with DESeq Library
 
-```{r, cache=TRUE, results='markup', message=FALSE, warning=FALSE}
+Identify DEGs with DESeq Library
+--------------------------------
+
+```{r DEG_with_DESeq, cache=TRUE, results='markup', message=FALSE, warning=FALSE}
 library(DESeq)
 countDF <- read.table("./result/chr19_countDF")
 conds <- targets$Factor
 cds <- newCountDataSet(countDF, conds) # Creates object of class CountDataSet derived from eSet class
-counts(cds)[1:4, ] # CountDataSet has similar accessor methods as eSet class.
+knitr::kable(counts(cds)[1:4, ]) # CountDataSet has similar accessor methods as eSet class.
 cds <- estimateSizeFactors(cds) # Estimates library size factors from count data. Alternatively, one can provide here the true library sizes with sizeFactors(cds) <- c(..., ...)
 cds <- estimateDispersions(cds) # Estimates the variance within replicates
 res <- nbinomTest(cds, "CLP", "Sham") # Calls DEGs with nbinomTest
 res <- na.omit(res)
 res2fold <- res[res$log2FoldChange >= 1 | res$log2FoldChange <= -1,]
 res2foldpadj <- res2fold[res2fold$padj <= 0.05, ]
-res2foldpadj[1:4,1:8]
+knitr::kable(res2foldpadj[1:4,1:8])
 ```
 
-***
-## Identify DEGs with edgeR's Exact Method
 
-```{r, cache=TRUE, results='markup', message=FALSE, warning=FALSE}
+Identify DEGs with edgeR's Exact Method
+---------------------------------------
+
+```{r DEG_with_edgeR, cache=TRUE, results='markup', message=FALSE, warning=FALSE}
 library(edgeR)
 countDF <- read.table("./result/chr19_countDF")
 y <- DGEList(counts=countDF, group=conds) # Constructs DGEList object
@@ -226,10 +478,11 @@ edge2fold <- edge[edge$logFC >= 1 | edge$logFC <= -1,]
 edge2foldpadj <- edge2fold[edge2fold$FDR <= 0.01, ]
 ```
 
-***
-## Idenfity DEGs with edgeR's GLM Approach
 
-```{r, cache=TRUE, results='markup', message=FALSE, warning=FALSE}
+Idenfity DEGs with edgeR's GLM Approach
+---------------------------------------
+
+```{r DEG_with_GLM, cache=TRUE, results='markup', message=FALSE, warning=FALSE}
 library(edgeR)
 countDF <- read.table("./result/chr19_countDF")
 y <- DGEList(counts=countDF, group=conds) # Constructs DGEList object
@@ -251,10 +504,11 @@ edgeglm2fold <- edgeglm[edgeglm$logFC >= 1 | edgeglm$logFC <= -1,]
 edgeglm2foldpadj <- edgeglm2fold[edgeglm2fold$FDR <= 0.01, ]
 ```
 
-***
-## Comparison Among DEG Results
 
-```{r, cache=TRUE, results='markup', message=FALSE, warning=FALSE}
+Comparison Among DEG Results
+----------------------------
+
+```{r Compare_DEG_Results, cache=TRUE, results='markup', message=FALSE, warning=FALSE}
 source("http://faculty.ucr.edu/~tgirke/Documents/R_BioCond/My_R_Scripts/overLapper.R")
 setlist <- list(edgeRexact=rownames(edge2foldpadj), edgeRglm=rownames(edgeglm2foldpadj), DESeq=as.character(res2foldpadj[,1]), RPKM=rownames(degs2fold))
 OLlist <- overLapper(setlist=setlist, sep="_", type="vennsets")
@@ -264,16 +518,23 @@ vennPlot(counts=counts, mymain="DEG Comparison")
 
 Number of common genes among all 4 methods: `r length(OLlist$Venn_List$edgeRexact_edgeRglm_DESeq_RPKM)`
 
-***
-## Heatmap of Top Ranking DEGs
 
-```{r, cache=TRUE, results='markup', message=FALSE, warning=FALSE}
+Heatmap of Top Ranking DEGs
+---------------------------
+
+```{r Heatmap_Top_Genes, cache=TRUE, results='markup', message=FALSE, warning=FALSE}
 library(lattice); library(gplots)
 y <- countDFrpkm[rownames(edgeglm2foldpadj)[1:15],]
 colnames(y) <- targets$Factor
 y <- t(scale(t(as.matrix(y))))
 y <- y[order(y[,1]),]
-levelplot(t(y), height=0.2, col.regions=colorpanel(40, "darkblue", "yellow", "white"), main="Expression Values (DEG Filter: FDR 1%, FC > 2)", colorkey=list(space="top"), xlab="", ylab="Gene ID")
+levelplot(t(y), height=0.2, col.regions=colorpanel(40, "darkblue", "yellow", "white"), 
+          main="Expression Values (DEG Filter: FDR 1%, FC > 2)", 
+          colorkey=list(space="top"), xlab="", ylab="Gene ID")
 
 
 ```
+
+
+References
+==========
